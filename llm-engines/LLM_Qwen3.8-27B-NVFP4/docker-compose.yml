@@ -48,7 +48,10 @@ services:
       OMP_NUM_THREADS: ${LLM_QWEN38_OMP_THREADS:-8}
       TOKENIZERS_PARALLELISM: "false"
     volumes:
-      - ${LLM_QWEN38_HF_CACHE_DIR:-./hf-cache}:/root/.cache/huggingface
+      # Weights were fetched with `hf download --local-dir` (flat layout, not a
+      # hub cache), so the engine serves the DIRECTORY, not a repo id —
+      # HF_HUB_OFFLINE then never matters for weight resolution.
+      - ${LLM_QWEN38_HF_CACHE_DIR:-./hf-cache}:/models:ro
       - ./vllm-cache:/root/.cache/vllm
     shm_size: "16gb"
     ulimits:
@@ -71,7 +74,8 @@ services:
       retries: 5
       start_period: 1200s
     command:
-      - ${LLM_QWEN38_MODEL:-RedHatAI/Qwen3.8-27B-NVFP4}
+      # Local dir mounted at /models (see volumes) — default when LLM_QWEN38_MODEL is unset.
+      - ${LLM_QWEN38_MODEL:-/models}
       # FRESH naming invariant: one name, same everywhere (see header).
       - --served-model-name
       - ${LLM_QWEN38_SERVED_NAME:-Qwen3.8-27B-NVFP4}
