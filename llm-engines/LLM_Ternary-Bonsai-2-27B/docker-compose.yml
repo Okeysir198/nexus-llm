@@ -1,0 +1,114 @@
+# llama-server serving PrismML Ternary-Bonsai-2-27B (ternary 1.72–2.13 bpw
+# GGUF, derived from Qwen3.8-27B: hybrid linear/self attention, 262k ctx).
+# Internal-only; the bridge reaches it as http://Ternary-Bonsai-2-27B:8000.
+# Naming invariant: folder = service = container_name = served name = route key.
+#
+# ⚠️ BINARY IS SOURCE-BUILT: the PrismML fork (branch `prism`) is REQUIRED —
+# stock llama.cpp loads these quants without warning and produces garbage
+# (model card). No linux-cuda-aarch64 release exists, so llama-server is
+# built for sm_121 by ../build (Dockerfile; binary copied to ./bin/).
+# Rebuild when bumping the fork.
+#
+# Quant A/B via LLM_BONSAI_QUANT (container recreate picks it up):
+#   PTQ1_0  5.95 GB  1.72 bpw  (dense-trit layout)
+#   PQ2_0   7.21 GB  2.13 bpw  (2-bit slot layout; ~130 tok/s on RTX 5090)
+#
+# Memory model: weights ~6-7 GB + llama.cpp KV. KV is q8_0-quantized to keep
+# 64k context in a small footprint (this is the VRAM-optimized config; the
+# model is 98.2% of FP16 quality at 1.72 bpw per the card's 14-bench suite).
+name: ${STACK_NAME:-nexus-llm}
+
+services:
+  Ternary-Bonsai-2-27B:
+    image: ${LLM_BONSAI_IMAGE:-nexus-llm-bonsai-runtime:latest}
+    container_name: ${LLM_BONSAI_SERVED_NAME:-Ternary-Bonsai-2-27B}
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    expose:
+      - "8000"
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ${LLM_BONSAI_GGUF_DIR:-./gguf-cache}:/models:ro
+      - ./bin:/bin-override:ro
+    shm_size: "4gb"
+    deploy:
+      resources:
+        limits:
+          cpus: "${LLM_BONSAI_CPUS:-8}"
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_CUDA_DEVICES:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
+    entrypoint: ["/bin-override/llama-server"]
+    command:
+      # NOTE: the PrismML fork's arg parser rejects the `--flag=value` form
+      # for --model ("invalid argument"); use space-separated args throughout.
+      - --model
+      - /models/${LLM_BONSAI_QUANT:-Ternary-Bonsai-2-27B-PTQ1_0.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      # Alias = route key. Quant stays an internal detail of the container.
+      - --alias
+      - ${LLM_BONSAI_SERVED_NAME:-Ternary-Bonsai-2-27B}
+      - --n-gpu-layers
+      - ${LLM_BONSAI_NGL:-99}
+      - --ctx-size
+      - ${LLM_BONSAI_CTX:-65536}
+      # Reasoning model: needs a generous output budget or replies come back
+      # empty (KNOWN_ISSUES.md). Client max_tokens must respect this too.
+      - -n
+      - ${LLM_BONSAI_N_PREDICT:-16384}
+      - --flash-attn
+      - "on"
+      - --cache-type-k
+      - ${LLM_BONSAI_KV_TYPE:-q8_0}
+      - --cache-type-v
+      - ${LLM_BONSAI_KV_TYPE:-q8_0}
+      # Parallel slots; llama.cpp splits ctx across them.
+      - --parallel
+      - ${LLM_BONSAI_PARALLEL:-4}
+      # Recommended sampling shipped in the GGUF (temp 1.0/top_k 20/top_p
+      # 0.95) plus min_p 0.05 (card's recommendation, llama.cpp default).
+      - --temp
+      - "1.0"
+      - --top-k
+      - "20"
+      - --top-p
+      - "0.95"
+      - --min-p
+      - "0.05"
+      # Reasoning: leave at auto so clients can steer via reasoning_effort
+      # (xhigh|medium|none; "high" 500s per KNOWN_ISSUES.md).
+      - --reasoning
+      - auto
+      - --jinja
+      # TTFT optimizations (2026-10-04): thread over-subscription (20 threads
+      # on an 8-CPU quota hurt prefill), larger prefill ubatches, and KV
+      # prefix reuse — every request shares the same system prompt, so the
+      # 6k-token prefill should happen once, not per request.
+      - --threads
+      - ${LLM_BONSAI_THREADS:-8}
+      - --batch-size
+      - "4096"
+      - --ubatch-size
+      - ${LLM_BONSAI_UBATCH:-2048}
+      - --cache-reuse
+      - ${LLM_BONSAI_CACHE_REUSE:-256}
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${NETWORK_NAME:-nexus-llm-net}
+    driver: bridge

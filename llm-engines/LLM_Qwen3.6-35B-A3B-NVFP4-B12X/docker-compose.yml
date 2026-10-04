@@ -1,0 +1,99 @@
+# vLLM serving unsloth/Qwen3.6-35B-A3B-NVFP4-Fast (the B12X route). Restored
+# 2026-10-04 after an A/B against the RedHatAI checkpoint: unsloth is ~2x
+# faster on this box (68.8 vs 35.4–42.0 tok/s single; 145 vs 78–81 tok/s
+# conc-10) at equal acceptable tool accuracy — see BENCHMARKS.md (both docs
+# live in this folder's history; the RedHatAI A/B numbers are recorded in
+# git-removed BENCHMARKS.md of LLM_Qwen3.6-35B-A3B-NVFP4).
+# Internal-only; the bridge reaches it as
+# http://Qwen3.6-35B-A3B-NVFP4-B12X:8000. FRESH naming invariant: folder =
+# service = container_name = served name = route key. The -B12X suffix
+# distinguishes provenance from the RedHatAI checkpoint (do NOT serve two
+# 3.6 variants from this engine — ONE ROUTE PER CONTAINER).
+#
+# Unsloth requant: FP8 attention/lm_head + NVFP4 MoE experts. Ships an MTP
+# head, but the head's experts are UNQUANTIZED and b12x rejects them — b12x
+# and MTP are MUTUALLY EXCLUSIVE here (measured: b12x no-MTP 70 tok/s vs
+# MTP+cutlass 23 tok/s). No spec decode.
+#
+# GB10 settings (unsloth.ai "DGX Spark with NVFP4 quants"):
+#   1. CUTE_DSL_ARCH=sm_121a
+#   2. --moe-backend=flashinfer_b12x (marlin is 2.5x slower for W4A4 here)
+# Do NOT force --attention-backend=flash_attn: this checkpoint carries an
+# FP8 KV scheme that flash_attn rejects; vLLM auto-selects FlashInfer.
+name: ${STACK_NAME:-nexus-llm}
+
+services:
+  Qwen3.6-35B-A3B-NVFP4-B12X:
+    image: ${LLM_QWEN36_IMAGE:-vllm/vllm-openai:v0.25.0-aarch64}
+    container_name: ${LLM_QWEN36_SERVED_NAME:-Qwen3.6-35B-A3B-NVFP4-B12X}
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    expose:
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      # Weights live in the hub-style cache below; offline avoids the HF
+      # metadata call that can hold the bridge swap lock on wake.
+      HF_HUB_OFFLINE: ${LLM_QWEN36_HF_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${LLM_QWEN36_HF_OFFLINE:-1}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VLLM_SERVER_DEV_MODE: "1"
+      CUTE_DSL_ARCH: ${LLM_QWEN36_CUTE_DSL_ARCH:-sm_121a}
+      OMP_NUM_THREADS: ${LLM_QWEN36_OMP_THREADS:-8}
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      # Hub-style cache (hf download with HF_HUB_CACHE=./hf-cache) — engine
+      # serves the repo id, resolved offline from this cache.
+      - ${LLM_QWEN36_HF_CACHE_DIR:-./hf-cache}:/root/.cache/huggingface/hub
+      - ./vllm-cache:/root/.cache/vllm
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        limits:
+          cpus: "${LLM_QWEN36_CPUS:-12}"
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_CUDA_DEVICES:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1200s
+    command:
+      - ${LLM_QWEN36_MODEL:-unsloth/Qwen3.6-35B-A3B-NVFP4-Fast}
+      - --served-model-name
+      - ${LLM_QWEN36_SERVED_NAME:-Qwen3.6-35B-A3B-NVFP4-B12X}
+      - --quantization=${LLM_QWEN36_QUANTIZATION:-compressed-tensors}
+      - --dtype=auto
+      # Checkpoint native 262144 OOMs the shared pool; 131072 + absolute KV
+      # pin (never util x total profiling on GB10). FP8 KV: 4 GiB ≈ 298k
+      # tokens → 2.27x concurrency at 131k.
+      - --max-model-len=${LLM_QWEN36_MAX_LEN:-131072}
+      - --max-num-seqs=${LLM_QWEN36_MAX_SEQS:-16}
+      - --max-num-batched-tokens=${LLM_QWEN36_MAX_BATCHED_TOKENS:-4096}
+      - --gpu-memory-utilization=${LLM_QWEN36_GPU_UTIL:-0.40}
+      - --kv-cache-memory-bytes=${LLM_QWEN36_KV_CACHE_BYTES:-4294967296}  # 4 GiB (FP8 KV); total ≈ weights 23.7 + 4 + overhead ≈ 30-38 GiB
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --moe-backend=${LLM_QWEN36_MOE_BACKEND:-flashinfer_b12x}
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${LLM_QWEN36_TOOL_PARSER:-qwen3_coder}
+      - --reasoning-parser=${LLM_QWEN36_REASONING_PARSER:-qwen3}
+      - --limit-mm-per-prompt={"image":0}
+      - --host=0.0.0.0
+      - --port=8000
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${NETWORK_NAME:-nexus-llm-net}
+    driver: bridge

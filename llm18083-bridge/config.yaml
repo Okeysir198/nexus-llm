@@ -11,7 +11,7 @@
 # `${VAR:-default}` is interpolated against the process env at load time
 # (gateway.py::_interpolate), so docker compose env_file values flow in.
 
-default_awake: ${LLM_DEFAULT_MODEL:-Qwen3.8-27B-NVFP4}
+default_awake: ${LLM_DEFAULT_MODEL:-LFM2.5-8B-A1B}
 
 # KEEP THIS 0 ON GB10. "VRAM" and system RAM are ONE 128 GB unified pool, so a
 # vLLM in TIER1 sleep (/sleep level=1) spills its weights to the same pool it
@@ -46,7 +46,19 @@ idle_sleep_s: ${LLM_IDLE_SLEEP_S:-600}
 # prefix and forwards the bare route key here — adding a route needs zero
 # Worker changes.
 routes:
-  - model: Qwen3.8-27B-NVFP4
-    upstream: http://${LLM_QWEN38_SERVED_NAME:-Qwen3.8-27B-NVFP4}:8000
-    container: ${LLM_QWEN38_SERVED_NAME:-Qwen3.8-27B-NVFP4}
-    supports_sleep_mode: ${LLM_QWEN38_SLEEP_MODE:-false}
+  - model: Ornith-1.5-35B-A3B-NVFP4
+    upstream: http://${LLM_ORNITH_SERVED_NAME:-Ornith-1.5-35B-A3B-NVFP4}:8000
+    container: ${LLM_ORNITH_SERVED_NAME:-Ornith-1.5-35B-A3B-NVFP4}
+    supports_sleep_mode: ${LLM_ORNITH_SLEEP_MODE:-false}
+  - model: Ternary-Bonsai-2-27B
+    upstream: http://${LLM_BONSAI_SERVED_NAME:-Ternary-Bonsai-2-27B}:8000
+    container: ${LLM_BONSAI_SERVED_NAME:-Ternary-Bonsai-2-27B}
+    supports_sleep_mode: ${LLM_BONSAI_SLEEP_MODE:-false}
+  - model: LFM2.5-8B-A1B
+    upstream: http://${LLM_LFM_SERVED_NAME:-LFM2.5-8B-A1B}:8000
+    container: ${LLM_LFM_SERVED_NAME:-LFM2.5-8B-A1B}
+    supports_sleep_mode: ${LLM_LFM_SLEEP_MODE:-false}
+  - model: Qwen3.6-35B-A3B-NVFP4-B12X
+    upstream: http://${LLM_QWEN36_SERVED_NAME:-Qwen3.6-35B-A3B-NVFP4-B12X}:8000
+    container: ${LLM_QWEN36_SERVED_NAME:-Qwen3.6-35B-A3B-NVFP4-B12X}
+    supports_sleep_mode: ${LLM_QWEN36_SLEEP_MODE:-false}

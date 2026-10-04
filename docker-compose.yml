@@ -11,7 +11,10 @@
 name: ${STACK_NAME:-nexus-llm}
 
 include:
-  - llm-engines/LLM_Qwen3.8-27B-NVFP4/docker-compose.yml
+  - llm-engines/LLM_Ornith-1.5-35B-A3B-NVFP4/docker-compose.yml
+  - llm-engines/LLM_Ternary-Bonsai-2-27B/docker-compose.yml
+  - llm-engines/LLM_Qwen3.6-35B-A3B-NVFP4-B12X/docker-compose.yml
+  - llm-engines/LLM_LFM2.5-8B-A1B/docker-compose.yml
 
 services:
 
@@ -32,7 +35,7 @@ services:
       - ./llm18083-bridge/gateway.py:/app/gateway.py:ro
     environment:
       GATEWAY_CONFIG_PATH: /app/config.yaml
-      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-Qwen3.8-27B-NVFP4}
+      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-LFM2.5-8B-A1B}
       LLM_WAKE_ON_BOOT: ${LLM_WAKE_ON_BOOT:-false}
       LLM_MAX_TIER1: ${LLM_MAX_TIER1:-0}
       LLM_WAKE_TIMEOUT_S: ${LLM_WAKE_TIMEOUT_S:-900}

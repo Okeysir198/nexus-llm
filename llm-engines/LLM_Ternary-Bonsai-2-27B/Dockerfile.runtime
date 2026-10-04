@@ -1,0 +1,17 @@
+# Runtime image for the source-built PrismML llama-server (see Dockerfile for
+# the build). CUDA runtime base (no toolkit needed at runtime); the GGML libs
+# ship alongside the binary from llama.cpp-src/build/bin.
+FROM nvcr.io/nvidia/cuda:13.0.1-runtime-ubuntu24.04
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl libcurl4 libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY bin/llama-server /usr/local/bin/llama-server
+COPY bin/libggml*.so* /usr/local/lib/
+COPY bin/libllama*.so* /usr/local/lib/
+COPY bin/libmtmd*.so* /usr/local/lib/
+RUN ldconfig
+
+EXPOSE 8000
+ENTRYPOINT ["llama-server"]

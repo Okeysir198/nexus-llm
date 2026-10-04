@@ -47,7 +47,10 @@ TARGETS: dict[str, dict] = {
         "key_env": None,                       # vLLM ignores auth
         "model": os.environ.get("VLLM_MODEL", "Qwen3.8-27B-NVFP4"),
         # vLLM-specific knobs that other providers reject (HTTP 400).
-        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+        # enable_thinking=false is Qwen3-family only: LFM2.5's chat template
+        # MISHANDLES it — with it, the model answers in prose and never emits
+        # tool_calls (found 2026-10-04). Keep the extra_body model-conditional.
+        "extra_body": {},
     },
     "openai": {
         "base": "https://api.openai.com/v1",
@@ -124,6 +127,12 @@ API_KEY = (
     or "not-needed"
 )
 TARGET_EXTRA_BODY: dict = dict(_t.get("extra_body") or {})
+# Thinking control is model-conditional: Qwen3-family templates honor
+# enable_thinking=false (their default thinking eats the small per-section
+# output budgets), but LFM2.5's template MISHANDLES the kwarg — with it the
+# model answers in prose and never emits tool_calls (found 2026-10-04).
+if not os.environ.get("VLLM_MODEL", "").startswith("LFM"):
+    TARGET_EXTRA_BODY.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
 CONC = _CONC_CLI if _CONC_CLI is not None else int(os.environ.get("CONC", "10"))
 
 # Suppress a noisy upstream import-time warning:

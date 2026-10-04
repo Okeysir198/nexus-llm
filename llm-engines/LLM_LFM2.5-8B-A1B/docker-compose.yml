@@ -1,0 +1,123 @@
+# vLLM serving LiquidAI/LFM2.5-8B-A1B (Liquid's sparse-MoE flagship, May
+# 2026). Internal-only; the bridge reaches it via Docker DNS as
+# `http://LFM2.5-8B-A1B:8000`. FRESH naming invariant: folder = service =
+# container_name = served-model-name = gateway route key.
+#
+# Checkpoint: Lfm2MoeForCausalLM, 8.3B total / 1.5B active (32 experts, top-4),
+# 24 layers (18 double-gated conv + 6 GQA), 128k context, BF16 (~16.6 GB).
+# No NVFP4 quant exists upstream — BF16 is the serving precision; still the
+# lowest-VRAM serious engine here next to Bonsai's ternary GGUF.
+#
+# Role in the fleet (2026-10-04): the fast/low-VRAM candidate for the agent
+# team. Tool quality is the open question (BFCLv3 64.4 vs Ornith class) —
+# BENCHMARKS.md records the A/B against Ornith and Bonsai.
+#
+# GB10 notes:
+#   • Stock vllm/vllm-openai:v0.25.0-aarch64 has Lfm2MoeForCausalLM and the
+#     `lfm2` tool parser registered — no custom image, no patch overlays.
+#   • BF16 MoE uses the default MoE path; do NOT set --moe-backend b12x
+#     (that family is for NVFP4 checkpoints on sm_121).
+#   • The card ships a DSpark speculative drafter (~2.5x claimed) — invariant
+#     7: DSpark drafters were a net LOSS for Bonsai on this box. Not enabled;
+#     benchmark before adding.
+name: ${STACK_NAME:-nexus-llm}
+
+services:
+  LFM2.5-8B-A1B:
+    image: ${LLM_LFM_IMAGE:-vllm/vllm-openai:v0.25.0-aarch64}
+    container_name: ${LLM_LFM_SERVED_NAME:-LFM2.5-8B-A1B}
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    expose:
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HUB_OFFLINE: ${LLM_LFM_HF_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${LLM_LFM_HF_OFFLINE:-1}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VLLM_SERVER_DEV_MODE: "1"
+      # Blackwell RMSNorm kernels (+2.6% on B200 per the vLLM LFM2.5 recipe).
+      # VLLM_USE_OINK_OPS: "1"  # BROKE lfm2 tool calls (empty tool_calls, 2026-10-04)
+      OMP_NUM_THREADS: ${LLM_LFM_OMP_THREADS:-8}
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      # Weights fetched with `hf download --local-dir` (flat layout): the
+      # engine serves the DIRECTORY, so HF_HUB_OFFLINE=1 never affects
+      # weight resolution.
+      - ${LLM_LFM_HF_CACHE_DIR:-./hf-cache}:/models:ro
+      - ./drafter:/drafter:ro
+      - ./vllm-cache:/root/.cache/vllm
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        limits:
+          cpus: "${LLM_LFM_CPUS:-12}"
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_CUDA_DEVICES:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1200s
+    command:
+      - ${LLM_LFM_MODEL:-/models}
+      - --served-model-name
+      - ${LLM_LFM_SERVED_NAME:-LFM2.5-8B-A1B}
+      - --dtype=auto
+      # FP8 dynamic weight quant (computed from BF16 at load): weights
+      # 16.6 -> ~8.3 GB, and FP8 GEMMs are native on GB10 — bench 2026-10-04
+      # showed speed parity or better vs BF16 (see BENCHMARKS.md). Set
+      # LLM_LFM_QUANT=off and comment this line to serve BF16 instead.
+      - --quantization=${LLM_LFM_QUANT:-fp8}
+      # 128k native context; the 8 GiB KV pin below affords it with room for
+      # concurrent sessions (hidden 2048 keeps KV light).
+      - --max-model-len=${LLM_LFM_MAX_LEN:-128000}
+      - --max-num-seqs=${LLM_LFM_MAX_SEQS:-24}
+      - --max-num-batched-tokens=${LLM_LFM_MAX_BATCHED_TOKENS:-4096}
+      - --gpu-memory-utilization=${LLM_LFM_GPU_UTIL:-0.40}
+      - --kv-cache-memory-bytes=${LLM_LFM_KV_CACHE_BYTES:-4294967296}  # 4 GiB (≈350k BF16 tokens, ≈700k FP8 — 5 concurrent 64k streams)
+      # FP8 KV cache: vLLM-measured ≤0.7pt accuracy impact, ~2x KV capacity
+      # per GiB (supports the 5-concurrent-window budget at this pin).
+      # - --kv-cache-dtype=fp8_e4m3  # BROKE lfm2 tool calls entirely (0/10 wrong or empty, 2026-10-04) — do not re-enable without re-testing tools
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      # LFM2 function calling: pythonic tool calls between <|tool_call_*|>
+      # tokens; the registered `lfm2` parser handles them.
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${LLM_LFM_TOOL_PARSER:-lfm2}
+      # Per the official vLLM LFM2.5 recipe: splits <think>…</think> into a
+      # separate reasoning_content field instead of leaking into content.
+      - --reasoning-parser=qwen3
+      - --host=0.0.0.0
+      - --port=8000
+      # DSpark speculative decoding A/B (2026-10-04): set LLM_LFM_SPEC in
+      # .env, e.g. LLM_LFM_SPEC={"method":"draft_model","model":"/drafter","num_speculative_tokens":1,"draft_tensor_config":"auto"}
+      # The drafter (tugot17/LFM2.5-8B-A1B-DSpark-2L) is mounted at /drafter.
+      # Invariant 7: DSpark drafters were a net LOSS for Bonsai on GB10 —
+      # keep the A/B numbers in BENCHMARKS.md before making this default.
+      # DSpark speculative decoding A/B. NOTE: needs Lfm2DSparkDraftModel,
+      # which neither vllm-openai:v0.25.0-aarch64 nor eugr dev21553 support —
+      # only vllm cu134/cu129-nightly-aarch64 (2026-10-04+) do. On the stock
+      # image this line CRASH-LOOPS the boot.
+      # NOT SERVABLE (2026-10-04): every available build — vllm-openai
+      # v0.25.0-aarch64, eugr dev21553, even vllm cu134-nightly-aarch64 —
+      # lacks `Lfm2DSparkDraftModel` (the official LiquidAI/LFM2.5-8B-A1B-DSpark
+      # drafter's arch). DSpark for LFM2.5 is llama.cpp-only today (DSpark-GGUF).
+      # Re-test when a vLLM release registers the arch.
+      # - --speculative-config={"method":"draft_model","model":"/drafter","num_speculative_tokens":1}
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${NETWORK_NAME:-nexus-llm-net}
+    driver: bridge

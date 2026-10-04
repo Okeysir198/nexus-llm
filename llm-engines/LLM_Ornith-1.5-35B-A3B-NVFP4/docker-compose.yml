@@ -1,0 +1,131 @@
+# vLLM serving ornith-ai/Ornith-1.5-35B-A3B-NVFP4. Internal-only (no host
+# port); the bridge sibling reaches it via Docker DNS as
+# `http://Ornith-1.5-35B-A3B-NVFP4:8000` over the shared network. FRESH
+# naming invariant: folder = service = container_name = served-model-name =
+# gateway route key.
+#
+# Checkpoint: Ornith-1.5-35B-A3B (Qwen3.5-MoE family: hybrid linear_attn +
+# self_attn, hidden 2048, ~3B active), NVFP4 experts + FP8 projections +
+# FP8 KV (modelopt MIXED_PRECISION — auto-read, no --quantization flag).
+# ~22 GB on disk.
+#
+# Engine: eugr/spark-vllm-b12x (the Ornith DGX-Spark recipe's image, vLLM
+# v0.1.dev20003) — NOT our vllm/vllm-openai:v0.25.0-aarch64: that stock image
+# lacks the b12x MoE package layout these patches target. Backend is
+# `--moe-backend b12x` (NVFP4-native path for the main model, FlashInfer
+# cutlass for the MTP draft head) per the recipe's start.sh; flashinfer_b12x
+# is rejected for the unquantized draft layers.
+#
+# Two host-side patch overlays (from MiaAI-Lab/Ornith-1.5-35B-A3B-DGX-Spark,
+# mounted read-only, no image rebuild) fix b12x bugs that crash when MTP +
+# CUDA graphs are enabled:
+#   patches/kernel.py     — undefined metadata_row in the W4A16 drain path
+#   patches/route_pack.py — torch.empty workspace per call is illegal under
+#                           CUDA graph capture; stable grow-only cache instead
+#
+# Deviations from the recipe's start.sh (deliberate):
+#   • --kv-cache-memory-bytes pin instead of probed --gpu-memory-utilization
+#     (GB10 invariant: util x total profiling is non-deterministic on the
+#     unified pool). Util ceiling stays 0.40.
+#   • NO MTP on the baseline boot. The recipe claims ~2x with
+#     --spec-method mtp --spec-tokens 1, but spec-decode was a net loss for
+#     Bonsai on GB10 — benchmark before/after by flipping LLM_ORNITH_MTP.
+#   • Text-only first ({"image":0}) — video profiling compiled the triton
+#     pos-embed kernel that crash-looped Qwen3.8; vision enabled later,
+#     deliberately.
+name: ${STACK_NAME:-nexus-llm}
+
+services:
+  Ornith-1.5-35B-A3B-NVFP4:
+    image: ${LLM_ORNITH_IMAGE:-eugr/spark-vllm-b12x:latest}
+    container_name: ${LLM_ORNITH_SERVED_NAME:-Ornith-1.5-35B-A3B-NVFP4}
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    expose:
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HUB_OFFLINE: ${LLM_ORNITH_HF_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${LLM_ORNITH_HF_OFFLINE:-1}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VLLM_SERVER_DEV_MODE: "1"
+      CUTE_DSL_ARCH: ${LLM_ORNITH_CUTE_DSL_ARCH:-sm_121a}
+      OMP_NUM_THREADS: ${LLM_ORNITH_OMP_THREADS:-8}
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      # Weights fetched with `hf download --local-dir` (flat layout): the
+      # engine serves the DIRECTORY, so HF_HUB_OFFLINE=1 never affects
+      # weight resolution.
+      - ${LLM_ORNITH_HF_CACHE_DIR:-./hf-cache}:/models:ro
+      - ./vllm-cache:/root/.cache/vllm
+      # b12x bug-fix overlays (see header). The recipe (validated 2026-08-19
+      # on what was then `latest`, build v0.1.dev20003 ≈ nightly-20260815)
+      # needs these for MTP + CUDA graphs. On the current `latest`
+      # (v0.1.dev21553, b12x 1.5.0) they DON'T apply (changed intrinsics API
+      # -> ImportError) and the stock b12x kernel hit an illegal memory
+      # access at batch=10 under CUDA graphs — so stay on the pinned
+      # nightly, don't float `latest` for this engine.
+      - ./patches/kernel.py:/usr/local/lib/python3.12/dist-packages/b12x/moe/_shared/kernels/w4a16/kernel.py:ro
+      - ./patches/route_pack.py:/usr/local/lib/python3.12/dist-packages/b12x/moe/_shared/kernels/w4a16/route_pack.py:ro
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        limits:
+          cpus: "${LLM_ORNITH_CPUS:-12}"
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_CUDA_DEVICES:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1200s
+    command:
+      # The eugr image's NVIDIA entrypoint execs CMD as-is (no vllm default,
+      # unlike vllm/vllm-openai) — "vllm serve" must be explicit.
+      - vllm
+      - serve
+      - ${LLM_ORNITH_MODEL:-/models}
+      - --served-model-name
+      - ${LLM_ORNITH_SERVED_NAME:-Ornith-1.5-35B-A3B-NVFP4}
+      - --dtype=auto
+      # Hybrid linear attention + FP8 KV is light; 128k fits comfortably in
+      # the 8 GiB pin (the recipe measured ~65k tokens/GB at fp8 KV).
+      - --max-model-len=${LLM_ORNITH_MAX_LEN:-131072}
+      - --max-num-seqs=${LLM_ORNITH_MAX_SEQS:-24}
+      - --max-num-batched-tokens=${LLM_ORNITH_MAX_BATCHED_TOKENS:-4096}
+      - --gpu-memory-utilization=${LLM_ORNITH_GPU_UTIL:-0.40}
+      - --kv-cache-memory-bytes=${LLM_ORNITH_KV_CACHE_BYTES:-8589934592}  # 8 GiB
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      # b12x MoE backend from the recipe (see header) — NOT flashinfer_b12x.
+      - --moe-backend=${LLM_ORNITH_MOE_BACKEND:-b12x}
+      # MTP A/B result 2026-10-04 (8 GiB KV pin, 131k ctx, 6k-token prompt):
+      # ON  → single-stream ~98 tok/s effective (+35%), but +3.2 GB VRAM
+      #       (33.5 vs 30.3), KV 657k vs 760k tokens, and concurrency-10
+      #       aggregate DROPS 138 → 105–122 tok/s with worse TTFT.
+      # OFF is the default (agent traffic on this box is multi-stream).
+      # Flip on only for single-stream voice-style workloads:
+      # - --spec-method=mtp
+      # - --spec-tokens=${LLM_ORNITH_SPEC_TOKENS:-1}
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${LLM_ORNITH_TOOL_PARSER:-qwen3_xml}
+      - --reasoning-parser=${LLM_ORNITH_REASONING_PARSER:-qwen3}
+      - --limit-mm-per-prompt={"image":0,"video":0}
+      - --host=0.0.0.0
+      - --port=8000
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${NETWORK_NAME:-nexus-llm-net}
+    driver: bridge

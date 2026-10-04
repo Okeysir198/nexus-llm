@@ -1,8 +1,6 @@
 # nexus-llm — CLAUDE.md
 
-On-box LLM for the nexus gateway. Own repo (moved 2026-10-04 from
-`P20251225-general-setup/setup18083_llm`, which is stopped in place — its 4
-old engines stay on disk there, un-migrated). SELF-CONTAINED, like
+On-box LLM for the nexus gateway. Own repo. SELF-CONTAINED, like
 `nexus-stt` / `nexus-tts`: nothing here references the monorepo.
 
 ## Public surface — already wired, don't rebuild it
@@ -33,7 +31,7 @@ nexus-llm/
 └── tests/                    # uv project: streaming bench, sleep/wake cycle
 ```
 
-**FRESH invariant (this repo keeps it clean, unlike the old stack):**
+**FRESH invariant:**
 
 ```
 folder  llm-engines/LLM_<X>
@@ -44,9 +42,6 @@ edge     hosted_llm:<X>
 
 - **ONE ROUTE PER CONTAINER.** Two route keys → one container breaks the swap
   state machine (endless start/stop fight). Alias above the bridge, never here.
-- The old stack's "container names ≠ route keys" cleanup (2026-07-25) does not
-  apply here: no legacy aliases, pick the final name on day one (it carries
-  the quantization: `Qwen3.8-27B-NVFP4`, no vendor tag).
 
 ## GB10 invariants (violating any of these OOMs or wedges the box)
 
@@ -71,12 +66,16 @@ edge     hosted_llm:<X>
    `vllm/vllm-openai:v0.25.0-aarch64` — the only healthy NVFP4-MoE path on
    sm_121. **Never marlin** (2.5× slower for W4A4 on this box). Don't force
    `--attention-backend=flash_attn` (rejects FP8 KV; vLLM picks FlashInfer).
-7. **Spec-decode is a net loss on GB10 so far** — Bonsai's DSpark drafter
-   halved throughput; Qwen3.6's MTP head had unquantized experts that b12x
-   rejects (crash-loop). Qwen3.8-27B ships MTP (3 tokens) + a DSpark
-   speculator — try only after confirming the draft head is FP4-quantized,
-   and benchmark before/after (count tokens via `usage.completion_tokens`,
-   NEVER SSE chunks — spec engines pack ~4.5 tokens per chunk).
+7. **Spec-decode is a net loss on GB10 — verified on 3 checkpoints**
+   (Bonsai DSpark, Ornith MTP, RedHatAI Qwen3.6-35B DSpark=8: 35 vs 69
+   tok/s on the unsloth requant). Ornith's MTP head is unquantized → b12x
+   rejects it (crash-loop); the LFM2.5 DSpark drafter is unservable
+   (`Lfm2DSparkDraftModel` unregistered in every vLLM build here, incl.
+   cu134-nightly 2026-10-04 — llama.cpp-only). The one winning combo
+   (Qwen3.6-B12X + DFlash, FULL cudagraphs) is documented in the old
+   DFlash recipe. Always benchmark before/after; count tokens via
+   `usage.completion_tokens`, NEVER SSE chunks — spec engines pack
+   multiple tokens per chunk.
 8. **Sustained GPU load = thermal power-off risk** (see
    `/srv/share/00_general/CLAUDE.md`). Benchmarks/concurrency runs need the
    thermal guard (`P20251225-general-setup/host-forensics/guarded-load/`).
@@ -88,7 +87,7 @@ edge     hosted_llm:<X>
     unbounded tokenizer/OMP pool starves the ~58 other containers during
     weight load / CUDA-graph capture.
 
-## Bridge mechanics (copied from setup18083_llm/gateway — don't regress)
+## Bridge mechanics — don't regress
 
 - `_state_resyncer` re-derives container state from Docker every 30 s — this
   is what makes sharing the host with `nexus-gpu-manager` safe. Keep it.
@@ -96,17 +95,19 @@ edge     hosted_llm:<X>
   raises within seconds; failed wakes are forced to TIER2. Keep it — without
   it one bad wake holds the swap lock for `wake.timeout_s` (900 s) and wedges
   everything.
-- Cold wake ≈ 80–180 s (vLLM weight load + CUDA-graph capture; first-ever
-  boot adds torch.compile). `start_period: 1200s` covers it — don't shorten.
+- Cold wake (warm caches): Bonsai ~5 s, LFM2.5 ~2–3 min, Qwen3.6-B12X
+  ~4–5 min, Ornith ~5–6 min (weight load + autotune; first-ever boot adds
+  torch.compile). `start_period: 1200s` covers it — don't shorten.
 - Idle reaper (`LLM_IDLE_SLEEP_S`, default 600) demotes the awake engine to
   TIER2 during quiet windows; next request pays the wake.
 - Test sleep/wake:
-  `curl -X POST 'localhost:18083/admin/sleep?model=Qwen3.8-27B-NVFP4&level=2'`
+  `curl -X POST 'localhost:18083/admin/sleep?model=LFM2.5-8B-A1B&level=2'`
   (always pass `level=2` — the handler defaults to 1).
 
 ## Onboarding contract — add the next self-hosted LLM in 3 steps
 
-1. `cp -r llm-engines/LLM_Qwen3.8-27B-NVFP4 llm-engines/LLM_<new>/`
+1. `cp -r llm-engines/LLM_Qwen3.6-35B-A3B-NVFP4-B12X llm-engines/LLM_<new>/`
+   (or any existing engine folder; do NOT copy its hf-cache/vllm-cache)
    - rename service/container to `<new>`'s suffix; served name = route key =
      container name (carry the quantization in the name, no vendor tag)
    - download weights into its `hf-cache/` (`hf download <repo> --local-dir …`)
@@ -122,21 +123,33 @@ edge     hosted_llm:<X>
    running standalone lands them on `<folder>_default` where the bridge can't
    resolve them, and every request times out at the 900 s wake budget).
    Then wake it with a request.
+4. Register it in the gpu-manager registry (nexus-gpu-manager, :18063):
+   `POST /registry/services` with the compose file/project/service — and
+   `DELETE /registry/services/<name>` for any engine this replaces
+   (stop its container first).
 
 Zero changes to nexus-gateway, zero bridge-code changes. Env-var contract is
 the API: every knob needs a compose default + a `config.yaml` default + a
 `.env.example` line. The stack must boot with an empty `.env`.
 
-## Engine: Qwen3.8-27B-NVFP4 (engine #1)
+## Fleet (2026-10-04) — LFM2.5 default, Ornith standard, Bonsai specialist
 
-RedHatAI quant of Qwen/Qwen3.8-27B — hybrid attention (`self_attn` +
-`linear_attn`), NVFP4 MLP experts + FP8 attention projections
-(compressed-tensors, auto-read — no `--quantization` flag), FP8 KV,
-~24.7 GB disk, ~36 GiB resident with the 8 GiB KV pin, Apache-2.0.
-Card-suggested parsers: `--reasoning-parser qwen3`
-`--tool-call-parser qwen3_xml` (NOT `qwen3_coder` — different checkpoint
-generation than the old Qwen3.6 routes). Served text-only
-(`--limit-mm-per-prompt={"image":0}`) — the vision tower is skipped.
+`LLM_DEFAULT_MODEL=LFM2.5-8B-A1B` (Liquid flagship: FP8 weights + 4 GiB KV
+pin, 13.7 GB, 74 tok/s single, 219–237 tok/s @conc-10 — best TTFT and
+concurrency per GB). `Ornith-1.5-35B-A3B-NVFP4` is the standard heavy route
+(30.3 GB, pinned to eugr `nightly-20260815` + 2 b12x patch overlays — NEVER
+float it to `latest`, which crash-loops b12x). `Ternary-Bonsai-2-27B` is the
+ultra-low-VRAM specialist (8.6 GB, PrismML llama.cpp fork built from source —
+see its Dockerfile/BENCHMARKS.md). `Qwen3.6-35B-A3B-NVFP4-B12X` is the
+unsloth-Fast requant (38 GB, b12x no-spec — b12x and MTP are mutually
+exclusive on this checkpoint; the RedHatAI/DSpark A/B lost and was removed,
+see its BENCHMARKS.md). Qwen3.8-27B and Qwen3-30B were decommissioned
+(weights deleted).
+
+Per-engine details, gotchas (image pins, the lfm2 enable_thinking trap, the
+Ornith concurrency crash on `latest`), and all numbers: each engine folder's
+`BENCHMARKS.md`. Test harness note: `tests/shared.py` extra_body must stay
+model-conditional — `enable_thinking=false` is Qwen3-family only.
 
 ## Tests
 
@@ -144,4 +157,5 @@ generation than the old Qwen3.6 routes). Served text-only
 `uv run python 01_streaming.py` (token-accurate streaming bench),
 `uv run python 00_sleep_wake.py` (TIER2 cycle; skip MODE=1, TIER1 is off),
 `uv run python 03_concurrent.py 10`. Benchmarks are sustained GPU load —
-run them under the thermal guard (invariant 8).
+run them under the thermal guard (invariant 8). Target a specific engine
+with `VLLM_MODEL=<route key>` (e.g. `VLLM_MODEL=LFM2.5-8B-A1B`).
