@@ -1,0 +1,111 @@
+# vLLM serving RedHatAI/Qwen3.8-27B-NVFP4. Internal-only (no host port); the
+# bridge sibling reaches it via Docker DNS as `http://Qwen3.8-27B-NVFP4:8000`
+# over the shared network. FRESH naming invariant: folder = service =
+# container_name = served-model-name = gateway route key (no legacy aliases —
+# unlike the old setup18083_llm stack).
+#
+# Checkpoint (per the RedHatAI card): Qwen3.8-27B, hybrid attention
+# (self_attn + linear_attn), NVFP4 MLP experts + FP8 attention projections in
+# compressed-tensors, FP8 KV. ~24.7 GB on disk. The quant scheme is auto-read
+# from the checkpoint — no --quantization flag needed.
+#
+# Two load-bearing GB10 settings carried over from the Qwen3.6 b12x route:
+#   1. CUTE_DSL_ARCH=sm_121a          — cute-DSL JIT target for this GPU
+#   2. --moe-backend=flashinfer_b12x  — the only NVFP4-MoE kernel compiled for
+#      sm_121 on this box. NEVER marlin (2.5x slower for W4A4 here).
+#      Requires vLLM >= 0.25.0, hence the pinned v0.25.0-aarch64 image.
+#
+# NO speculative decoding initially — deliberate. The card offers MTP
+# (num_speculative_tokens 3) and a DSpark speculator, but Qwen3.6's b12x route
+# crash-looped on MTP with unquantized MoE experts ("moe_backend=
+# 'flashinfer_b12x' is not supported for unquantized MoE"). Only try MTP after
+# confirming this checkpoint's draft head is itself FP4-quantized, and
+# benchmark before/after (spec was a net LOSS for Bonsai on GB10).
+name: ${STACK_NAME:-nexus-llm}
+
+services:
+  Qwen3.8-27B-NVFP4:
+    image: ${LLM_QWEN38_IMAGE:-vllm/vllm-openai:v0.25.0-aarch64}
+    container_name: ${LLM_QWEN38_SERVED_NAME:-Qwen3.8-27B-NVFP4}
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    expose:
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
+      TRANSFORMERS_OFFLINE: ${HF_HUB_OFFLINE:-0}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VLLM_SERVER_DEV_MODE: "1"
+      # cute-DSL JIT target for GB10 (sm_121). Without it the b12x MoE kernel
+      # compiles for the wrong arch / falls back to a slow path.
+      CUTE_DSL_ARCH: ${LLM_QWEN38_CUTE_DSL_ARCH:-sm_121a}
+      # This box runs ~58 containers on 20 cores; an unbounded OMP/tokenizer
+      # thread pool starves them during weight load and cudagraph capture.
+      OMP_NUM_THREADS: ${LLM_QWEN38_OMP_THREADS:-8}
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      - ${LLM_QWEN38_HF_CACHE_DIR:-./hf-cache}:/root/.cache/huggingface
+      - ./vllm-cache:/root/.cache/vllm
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        limits:
+          # Hard CPU ceiling so a cold boot can't saturate the host.
+          cpus: "${LLM_QWEN38_CPUS:-12}"
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_CUDA_DEVICES:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1200s
+    command:
+      - ${LLM_QWEN38_MODEL:-RedHatAI/Qwen3.8-27B-NVFP4}
+      # FRESH naming invariant: one name, same everywhere (see header).
+      - --served-model-name
+      - ${LLM_QWEN38_SERVED_NAME:-Qwen3.8-27B-NVFP4}
+      - --dtype=auto
+      # The card's evaluations ran at max_length 69632; the checkpoint's native
+      # context is far larger and would over-commit the shared unified pool.
+      # Pin KV absolutely (below) rather than trusting util x total profiling,
+      # which is non-deterministic on GB10's unified memory.
+      - --max-model-len=${LLM_QWEN38_MAX_LEN:-69632}
+      - --max-num-seqs=${LLM_QWEN38_MAX_SEQS:-16}
+      - --max-num-batched-tokens=${LLM_QWEN38_MAX_BATCHED_TOKENS:-4096}
+      - --gpu-memory-utilization=${LLM_QWEN38_GPU_UTIL:-0.40}
+      - --kv-cache-memory-bytes=${LLM_QWEN38_KV_CACHE_BYTES:-8589934592}  # 8 GiB; total ≈ weights 24.7 + 8 + overhead ≈ 36 GiB
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      # THE point of this route — the sm_121-compiled NVFP4 MoE kernel.
+      - --moe-backend=${LLM_QWEN38_MOE_BACKEND:-flashinfer_b12x}
+      # NOTE: do NOT force --attention-backend=flash_attn. FP8 KV schemes are
+      # rejected by flash_attn outright; vLLM auto-selects FlashInfer, which
+      # supports FP8 KV.
+      # Parsers per the model card (qwen3_xml — NOT the qwen3_coder the older
+      # Qwen3.6 checkpoints used).
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${LLM_QWEN38_TOOL_PARSER:-qwen3_xml}
+      - --reasoning-parser=${LLM_QWEN38_REASONING_PARSER:-qwen3}
+      # Text-only serving: the checkpoint is image-text-to-text, and the vision
+      # tower costs memory we don't spend for a chat/coding route.
+      - --limit-mm-per-prompt={"image":0}
+      - --host=0.0.0.0
+      - --port=8000
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${NETWORK_NAME:-nexus-llm-net}
+    driver: bridge

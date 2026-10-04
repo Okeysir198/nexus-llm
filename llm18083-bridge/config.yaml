@@ -1,0 +1,52 @@
+# Bridge swap policy
+# ────────────────────────────────────────────────────────────────────────
+# Invariants enforced by the bridge:
+#   • Exactly 1 upstream is AWAKE (VRAM resident, serving) at any time.
+#   • At most `max_tier1` upstreams in TIER1 (vLLM /sleep level=1).
+#   • Everything else is TIER2 (container stopped).
+#
+# Swaps are request-driven. An optional idle reaper (`idle_sleep_s`)
+# additionally demotes the AWAKE upstream after a quiet window.
+#
+# `${VAR:-default}` is interpolated against the process env at load time
+# (gateway.py::_interpolate), so docker compose env_file values flow in.
+
+default_awake: ${LLM_DEFAULT_MODEL:-Qwen3.8-27B-NVFP4}
+
+# KEEP THIS 0 ON GB10. "VRAM" and system RAM are ONE 128 GB unified pool, so a
+# vLLM in TIER1 sleep (/sleep level=1) spills its weights to the same pool it
+# just released — TIER1 frees nothing and still pins ~8 GB overhead. Only
+# TIER2 (full `docker stop`) actually returns memory here, which is why no
+# engine ships --enable-sleep-mode. Raising this is how you OOM the box.
+max_tier1: ${LLM_MAX_TIER1:-0}
+
+wake:
+  # Cold-start budget for vLLM init + NVFP4 weight load + CUDA-graph compile.
+  timeout_s: ${LLM_WAKE_TIMEOUT_S:-900}
+
+# Idle-demote the AWAKE upstream after N seconds of zero requests + zero
+# in-flight. 0 disables (model stays AWAKE indefinitely).
+idle_sleep_s: ${LLM_IDLE_SLEEP_S:-600}
+
+# Routes: `container` MUST match the upstream's `container_name`, and `model`
+# MUST be a name that upstream's `--served-model-name` answers to.
+#
+# Naming invariant (this repo keeps it CLEAN — the old setup18083_llm stack
+# carried legacy aliases; here folder = service = container_name =
+# served-model-name = route key).
+#
+# ⚠️ ONE ROUTE PER CONTAINER. Two route keys pointing at the same container
+# typecheck (routes is a dict keyed by model id) but break the swap state
+# machine: each key gets its own state, and the resyncer sees the sibling's
+# container change "out-of-band" and stops what the other just started — an
+# endless start/stop fight. Alias a model ABOVE this bridge, never with a
+# second route here.
+#
+# The public edge (nexus.leanwise.ai › hosted_llm:<route key>) strips its
+# prefix and forwards the bare route key here — adding a route needs zero
+# Worker changes.
+routes:
+  - model: Qwen3.8-27B-NVFP4
+    upstream: http://${LLM_QWEN38_SERVED_NAME:-Qwen3.8-27B-NVFP4}:8000
+    container: ${LLM_QWEN38_SERVED_NAME:-Qwen3.8-27B-NVFP4}
+    supports_sleep_mode: ${LLM_QWEN38_SLEEP_MODE:-false}

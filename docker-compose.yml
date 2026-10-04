@@ -1,0 +1,57 @@
+# nexus-llm — swap-lock bridge + one or more llm-engines/LLM_<name>/ engines.
+#
+# Standalone:   cp .env.example .env && docker compose up -d
+#
+# Onboard a new model (see CLAUDE.md › Onboarding contract):
+#   1. drop in an llm-engines/LLM_<name>/ folder
+#   2. add one line to the `include:` block below
+#   3. add one `routes:` entry to llm18083-bridge/config.yaml
+# Always run compose FROM THIS FOLDER — engines only get the shared network
+# via this parent (running from inside LLM_*/ lands them on the wrong network).
+name: ${STACK_NAME:-nexus-llm}
+
+include:
+  - llm-engines/LLM_Qwen3.8-27B-NVFP4/docker-compose.yml
+
+services:
+
+  llm-gateway:
+    build:
+      context: ./llm18083-bridge
+      dockerfile: Dockerfile
+    image: ${STACK_NAME:-nexus-llm}-gateway:latest
+    container_name: ${STACK_NAME:-nexus-llm}-gateway
+    restart: unless-stopped
+    ports:
+      # Same host port the old setup18083_llm stack used — the
+      # nexus-llm.leanwise.ai tunnel ingress targets this port unchanged.
+      - "${LLM_GATEWAY_PORT:-18083}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./llm18083-bridge/config.yaml:/app/config.yaml:ro
+      - ./llm18083-bridge/gateway.py:/app/gateway.py:ro
+    environment:
+      GATEWAY_CONFIG_PATH: /app/config.yaml
+      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-Qwen3.8-27B-NVFP4}
+      LLM_WAKE_ON_BOOT: ${LLM_WAKE_ON_BOOT:-false}
+      LLM_MAX_TIER1: ${LLM_MAX_TIER1:-0}
+      LLM_WAKE_TIMEOUT_S: ${LLM_WAKE_TIMEOUT_S:-900}
+      LLM_IDLE_SLEEP_S: ${LLM_IDLE_SLEEP_S:-600}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${NETWORK_NAME:-nexus-llm-net}
+    driver: bridge
+    ipam:
+      config:
+        # Pinned: the box's default address pools are exhausted; every nexus
+        # stack pins its own /24 (stt 20/21/22, tts 22, ocr 24/25).
+        - subnet: ${LLM_SUBNET:-172.16.26.0/24}

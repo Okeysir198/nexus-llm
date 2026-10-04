@@ -1,0 +1,9 @@
+# weights + caches (deleting hf-cache means a full re-download, ~25 GB/model)
+hf-cache/
+vllm-cache/
+__pycache__/
+.env
+tests/.env
+tests/.venv/
+tests/__pycache__/
+*.pyc
