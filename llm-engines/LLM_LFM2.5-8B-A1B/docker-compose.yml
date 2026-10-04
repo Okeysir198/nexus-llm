@@ -47,7 +47,6 @@ services:
       # engine serves the DIRECTORY, so HF_HUB_OFFLINE=1 never affects
       # weight resolution.
       - ${LLM_LFM_HF_CACHE_DIR:-./hf-cache}:/models:ro
-      - ./drafter:/drafter:ro
       - ./vllm-cache:/root/.cache/vllm
     shm_size: "16gb"
     ulimits:

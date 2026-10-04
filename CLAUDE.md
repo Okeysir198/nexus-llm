@@ -159,3 +159,5 @@ model-conditional — `enable_thinking=false` is Qwen3-family only.
 `uv run python 03_concurrent.py 10`. Benchmarks are sustained GPU load —
 run them under the thermal guard (invariant 8). Target a specific engine
 with `VLLM_MODEL=<route key>` (e.g. `VLLM_MODEL=LFM2.5-8B-A1B`).
+`uv run python 02_agent.py` exercises the tool-calling loop (uses the same
+model-conditional extra_body from shared.py).
