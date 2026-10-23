@@ -21,7 +21,6 @@ nexus.leanwise.ai  ──AIG──▶  nexus-llm.leanwise.ai (CF tunnel) ──�
 | route key | engine | VRAM | role |
 |---|---|---|---|
 | `LFM2.5-8B-A1B` | Liquid flagship, vLLM FP8 | 13.7 GB | **default** — best TTFT & concurrency/GB |
-| `Ornith-1.5-35B-A3B-NVFP4` | vLLM NVFP4 (pinned image) | 30.3 GB | heavy standard route |
 | `Qwen3.6-35B-A3B-NVFP4-B12X` | unsloth requant, vLLM b12x | 37.9 GB | 3.6 speed route |
 | `Ternary-Bonsai-2-27B` | PrismML llama.cpp, PTQ1_0 | 8.6 GB | ultra-low-VRAM specialist |
 

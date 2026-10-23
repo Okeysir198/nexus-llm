@@ -46,10 +46,6 @@ idle_sleep_s: ${LLM_IDLE_SLEEP_S:-600}
 # prefix and forwards the bare route key here — adding a route needs zero
 # Worker changes.
 routes:
-  - model: Ornith-1.5-35B-A3B-NVFP4
-    upstream: http://${LLM_ORNITH_SERVED_NAME:-Ornith-1.5-35B-A3B-NVFP4}:8000
-    container: ${LLM_ORNITH_SERVED_NAME:-Ornith-1.5-35B-A3B-NVFP4}
-    supports_sleep_mode: ${LLM_ORNITH_SLEEP_MODE:-false}
   - model: Ternary-Bonsai-2-27B
     upstream: http://${LLM_BONSAI_SERVED_NAME:-Ternary-Bonsai-2-27B}:8000
     container: ${LLM_BONSAI_SERVED_NAME:-Ternary-Bonsai-2-27B}

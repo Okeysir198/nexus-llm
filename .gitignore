@@ -13,7 +13,6 @@ llm-engines/LLM_Ternary-Bonsai-2-27B/llama.cpp-src/
 llm-engines/LLM_Ternary-Bonsai-2-27B/gguf-cache/
 llm-engines/LLM_Ternary-Bonsai-2-27B/bin/
 llm-engines/LLM_Ternary-Bonsai-2-27B/build.log
-llm-engines/LLM_Ornith-1.5-35B-A3B-NVFP4/vllm-cache/
 
 # Drafter weights + fetch logs (config/README of drafters stay tracked)
 drafter/model.safetensors

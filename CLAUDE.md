@@ -67,7 +67,7 @@ edge     hosted_llm:<X>
    sm_121. **Never marlin** (2.5× slower for W4A4 on this box). Don't force
    `--attention-backend=flash_attn` (rejects FP8 KV; vLLM picks FlashInfer).
 7. **Spec-decode is a net loss on GB10 — verified on 3 checkpoints**
-   (Bonsai DSpark, Ornith MTP, RedHatAI Qwen3.6-35B DSpark=8: 35 vs 69
+   (Bonsai DSpark, Ornith MTP [Ornith removed 2026-10-24], RedHatAI Qwen3.6-35B DSpark=8: 35 vs 69
    tok/s on the unsloth requant). Ornith's MTP head is unquantized → b12x
    rejects it (crash-loop); the LFM2.5 DSpark drafter is unservable
    (`Lfm2DSparkDraftModel` unregistered in every vLLM build here, incl.
@@ -96,7 +96,7 @@ edge     hosted_llm:<X>
   it one bad wake holds the swap lock for `wake.timeout_s` (900 s) and wedges
   everything.
 - Cold wake (warm caches): Bonsai ~5 s, LFM2.5 ~2–3 min, Qwen3.6-B12X
-  ~4–5 min, Ornith ~5–6 min (weight load + autotune; first-ever boot adds
+  ~4–5 min (weight load + autotune; first-ever boot adds
   torch.compile). `start_period: 1200s` covers it — don't shorten.
 - Idle reaper (`LLM_IDLE_SLEEP_S`, default 600) demotes the awake engine to
   TIER2 during quiet windows; next request pays the wake.
@@ -132,13 +132,11 @@ Zero changes to nexus-gateway, zero bridge-code changes. Env-var contract is
 the API: every knob needs a compose default + a `config.yaml` default + a
 `.env.example` line. The stack must boot with an empty `.env`.
 
-## Fleet (2026-10-04) — LFM2.5 default, Ornith standard, Bonsai specialist
+## Fleet (2026-10-04) — LFM2.5 default, Bonsai specialist (Ornith removed 2026-10-24)
 
 `LLM_DEFAULT_MODEL=LFM2.5-8B-A1B` (Liquid flagship: FP8 weights + 4 GiB KV
 pin, 13.7 GB, 74 tok/s single, 219–237 tok/s @conc-10 — best TTFT and
-concurrency per GB). `Ornith-1.5-35B-A3B-NVFP4` is the standard heavy route
-(30.3 GB, pinned to eugr `nightly-20260815` + 2 b12x patch overlays — NEVER
-float it to `latest`, which crash-loops b12x). `Ternary-Bonsai-2-27B` is the
+concurrency per GB). `Ternary-Bonsai-2-27B` is the
 ultra-low-VRAM specialist (8.6 GB, PrismML llama.cpp fork built from source —
 see its Dockerfile/BENCHMARKS.md). `Qwen3.6-35B-A3B-NVFP4-B12X` is the
 unsloth-Fast requant (38 GB, b12x no-spec — b12x and MTP are mutually
@@ -146,8 +144,7 @@ exclusive on this checkpoint; the RedHatAI/DSpark A/B lost and was removed,
 see its BENCHMARKS.md). Qwen3.8-27B and Qwen3-30B were decommissioned
 (weights deleted).
 
-Per-engine details, gotchas (image pins, the lfm2 enable_thinking trap, the
-Ornith concurrency crash on `latest`), and all numbers: each engine folder's
+Per-engine details, gotchas (image pins, the lfm2 enable_thinking trap), and all numbers: each engine folder's
 `BENCHMARKS.md`. Test harness note: `tests/shared.py` extra_body must stay
 model-conditional — `enable_thinking=false` is Qwen3-family only.
 
