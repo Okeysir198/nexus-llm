@@ -82,7 +82,7 @@ services:
       - --max-model-len=${LLM_LFM_MAX_LEN:-128000}
       - --max-num-seqs=${LLM_LFM_MAX_SEQS:-24}
       - --max-num-batched-tokens=${LLM_LFM_MAX_BATCHED_TOKENS:-4096}
-      - --gpu-memory-utilization=${LLM_LFM_GPU_UTIL:-0.40}
+      - --gpu-memory-utilization=${LLM_LFM_GPU_UTIL:-0.20}
       - --kv-cache-memory-bytes=${LLM_LFM_KV_CACHE_BYTES:-4294967296}  # 4 GiB (≈350k BF16 tokens, ≈700k FP8 — 5 concurrent 64k streams)
       # FP8 KV cache: vLLM-measured ≤0.7pt accuracy impact, ~2x KV capacity
       # per GiB (supports the 5-concurrent-window budget at this pin).
