@@ -80,7 +80,7 @@ services:
       - --served-model-name
       - ${LLM_BOLT_SERVED_NAME:-Nemotron-3.5-Bolt-E4B}
       - --dtype=bfloat16
-      - --quantization=${LLM_BOLT_QUANT:-fp8}
+      - --quantization=${LLM_BOLT_QUANT:-fp8_per_tensor}
       # 64K is the checkpoint's limit (input + output).
       - --max-model-len=${LLM_BOLT_MAX_LEN:-65536}
       - --max-num-seqs=${LLM_BOLT_MAX_SEQS:-24}

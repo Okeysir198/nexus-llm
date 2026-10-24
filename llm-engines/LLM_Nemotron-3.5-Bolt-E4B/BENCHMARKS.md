@@ -38,6 +38,19 @@ KV pin yields 120K tokens (1.84x at 64K) vs 159K without. LFM2.5 plain is
 still has the higher 8-way aggregate (219–237 at conc-10 per its notes — not
 re-measured here).
 
+## Other levers tried (2026-10-24, all with DFlash 4)
+
+| Variant | 1 stream | 8 streams, aggregate | Verdict |
+|---|---|---|---|
+| FP8 per-tensor + TRITON_ATTN (default) | 78–95 tok/s | 343–455 tok/s | keep |
+| `--attention-backend=FLASHINFER` | 75–78 tok/s | 330–433 tok/s | worse; also forces PIECEWISE cudagraphs with spec decode |
+| BF16 weights (14.8 GiB) | 48–56 tok/s | 238–287 tok/s | worse — weight bytes do matter once spec decode removes the step floor |
+
+The first 8-way burst after boot shows TTFT ~1.6 s (Triton `kernel_unified_attention`
+JIT for new batch shapes, logged by vLLM's JIT monitor); steady-state TTFT is
+~40–100 ms. `--quantization fp8` is deprecated in v0.32 — the compose uses
+`fp8_per_tensor`.
+
 ## Gotchas
 
 - **Thinking is OFF by default** in this chat template despite the card saying
