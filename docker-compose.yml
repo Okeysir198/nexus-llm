@@ -14,6 +14,7 @@ include:
   - llm-engines/LLM_Ternary-Bonsai-2-27B/docker-compose.yml
   - llm-engines/LLM_Qwen3.6-35B-A3B-NVFP4-B12X/docker-compose.yml
   - llm-engines/LLM_LFM2.5-8B-A1B/docker-compose.yml
+  - llm-engines/LLM_Nemotron-3.5-Bolt-E4B/docker-compose.yml
 
 services:
 

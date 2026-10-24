@@ -1,0 +1,103 @@
+# vLLM serving nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16 (Gemma-4-E4B-it
+# post-trained with GRPO for multi-turn tool use / instruction following /
+# grounding; 8B total, 4B effective; text-only; 64K context). Internal-only;
+# the bridge reaches it via Docker DNS as `http://Nemotron-3.5-Bolt-E4B:8000`.
+# FRESH naming invariant: folder = service = container_name =
+# served-model-name = gateway route key.
+#
+# Role in the fleet (2026-10-24): small/fast voice + persona + tool-use model
+# next to LFM2.5. Card benchmarks beat Gemma-4-E4B everywhere; trails
+# Qwen3.5-4B on Tau2/RULER/LongBench. BENCHMARKS.md records the A/B.
+#
+# GB10 notes:
+#   • Stock vllm/vllm-openai:v0.32.0 (arm64, already pulled) registers
+#     Gemma4ForConditionalGeneration, the `gemma4` tool + reasoning parsers
+#     and DFlashDraftModel — no custom image, no overlays. The card's recipe
+#     pins v0.31.0; 0.32 is newer.
+#   • Checkpoint is BF16 (~15.9 GB). FP8 dynamic quant at load is the default
+#     (LFM precedent); LLM_BOLT_QUANT=off serves BF16. Gemma-4 per-layer
+#     embeddings may not quantize, so the real footprint is measured, not
+#     assumed — see BENCHMARKS.md.
+#   • Multimodal towers are disabled (--limit-mm-per-prompt all 0): text only.
+#   • DFlash speculative decoding (companion NVFP4 drafter) is NOT enabled:
+#     NVIDIA's recipe is --max-num-seqs 1, and invariant 7 says spec-decode is
+#     usually a net loss on GB10. Benchmark before adding.
+#   • Thinking is on by default; disable per request with
+#     chat_template_kwargs.enable_thinking=false. Card sampling: temperature
+#     1.0, top_p 0.95 (generation_config.json also sets top_k 64; vLLM applies
+#     it as the default).
+name: ${STACK_NAME:-nexus-llm}
+
+services:
+  Nemotron-3.5-Bolt-E4B:
+    image: ${LLM_BOLT_IMAGE:-vllm/vllm-openai:v0.32.0}
+    container_name: ${LLM_BOLT_SERVED_NAME:-Nemotron-3.5-Bolt-E4B}
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    expose:
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HUB_OFFLINE: ${LLM_BOLT_HF_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${LLM_BOLT_HF_OFFLINE:-1}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VLLM_SERVER_DEV_MODE: "1"
+      OMP_NUM_THREADS: ${LLM_BOLT_OMP_THREADS:-8}
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      # Weights fetched with `hf download --local-dir` (flat layout): the
+      # engine serves the DIRECTORY, so HF_HUB_OFFLINE=1 never affects
+      # weight resolution.
+      - ${LLM_BOLT_HF_CACHE_DIR:-./hf-cache}:/models:ro
+      - ./vllm-cache:/root/.cache/vllm
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        limits:
+          cpus: "${LLM_BOLT_CPUS:-12}"
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_CUDA_DEVICES:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1200s
+    command:
+      - /models
+      - --served-model-name
+      - ${LLM_BOLT_SERVED_NAME:-Nemotron-3.5-Bolt-E4B}
+      - --dtype=bfloat16
+      - --quantization=${LLM_BOLT_QUANT:-fp8}
+      # 64K is the checkpoint's limit (input + output).
+      - --max-model-len=${LLM_BOLT_MAX_LEN:-65536}
+      - --max-num-seqs=${LLM_BOLT_MAX_SEQS:-24}
+      - --max-num-batched-tokens=${LLM_BOLT_MAX_BATCHED_TOKENS:-8192}
+      # Invariant 2: KV is pinned absolutely; util is only a generous ceiling.
+      - --gpu-memory-utilization=${LLM_BOLT_GPU_UTIL:-0.20}
+      - --kv-cache-memory-bytes=${LLM_BOLT_KV_CACHE_BYTES:-4294967296}  # 4 GiB
+      - --kv-cache-dtype=auto
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --chat-template=/models/chat_template.jinja
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${LLM_BOLT_TOOL_PARSER:-gemma4}
+      - --reasoning-parser=${LLM_BOLT_REASONING_PARSER:-gemma4}
+      - --limit-mm-per-prompt={"image":0,"video":0,"audio":0}
+      - --host=0.0.0.0
+      - --port=8000
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${NETWORK_NAME:-nexus-llm-net}
+    driver: bridge

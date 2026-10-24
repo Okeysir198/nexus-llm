@@ -132,7 +132,7 @@ Zero changes to nexus-gateway, zero bridge-code changes. Env-var contract is
 the API: every knob needs a compose default + a `config.yaml` default + a
 `.env.example` line. The stack must boot with an empty `.env`.
 
-## Fleet (2026-10-04) — LFM2.5 default, Bonsai specialist (Ornith removed 2026-10-24)
+## Fleet (2026-10-04) — LFM2.5 default, Bonsai specialist, Bolt small/fast (Ornith removed 2026-10-24)
 
 `LLM_DEFAULT_MODEL=LFM2.5-8B-A1B` (Liquid flagship: FP8 weights + 4 GiB KV
 pin, 13.7 GB, 74 tok/s single, 219–237 tok/s @conc-10 — best TTFT and
@@ -141,7 +141,12 @@ ultra-low-VRAM specialist (8.6 GB, PrismML llama.cpp fork built from source —
 see its Dockerfile/BENCHMARKS.md). `Qwen3.6-35B-A3B-NVFP4-B12X` is the
 unsloth-Fast requant (38 GB, b12x no-spec — b12x and MTP are mutually
 exclusive on this checkpoint; the RedHatAI/DSpark A/B lost and was removed,
-see its BENCHMARKS.md). Qwen3.8-27B and Qwen3-30B were decommissioned
+see its BENCHMARKS.md). `Nemotron-3.5-Bolt-E4B` (added 2026-10-24) is NVIDIA's Gemma-4-E4B
+post-train for instruction following / persona / tool use: stock vLLM v0.32.0
+arm64, FP8 at load (10.6 GiB weights, ~15.5 GiB total), ~35 tok/s single
+(slower than LFM, better card scores). Thinking is OFF unless
+`chat_template_kwargs.enable_thinking=true`. DFlash drafter not enabled.
+Qwen3.8-27B and Qwen3-30B were decommissioned
 (weights deleted).
 
 Per-engine details, gotchas (image pins, the lfm2 enable_thinking trap), and all numbers: each engine folder's

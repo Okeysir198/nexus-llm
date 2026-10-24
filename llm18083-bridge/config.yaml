@@ -54,6 +54,10 @@ routes:
     upstream: http://${LLM_LFM_SERVED_NAME:-LFM2.5-8B-A1B}:8000
     container: ${LLM_LFM_SERVED_NAME:-LFM2.5-8B-A1B}
     supports_sleep_mode: ${LLM_LFM_SLEEP_MODE:-false}
+  - model: Nemotron-3.5-Bolt-E4B
+    upstream: http://${LLM_BOLT_SERVED_NAME:-Nemotron-3.5-Bolt-E4B}:8000
+    container: ${LLM_BOLT_SERVED_NAME:-Nemotron-3.5-Bolt-E4B}
+    supports_sleep_mode: ${LLM_BOLT_SLEEP_MODE:-false}
   - model: Qwen3.6-35B-A3B-NVFP4-B12X
     upstream: http://${LLM_QWEN36_SERVED_NAME:-Qwen3.6-35B-A3B-NVFP4-B12X}:8000
     container: ${LLM_QWEN36_SERVED_NAME:-Qwen3.6-35B-A3B-NVFP4-B12X}
