@@ -9,9 +9,9 @@ quant at load, 4 GiB KV pin, `gemma4` tool + reasoning parsers.
 
 | Item | Value |
 |---|---|
-| Weights in VRAM (FP8) | 10.58 GiB — Gemma-4 per-layer embeddings do not quantize, so FP8 saves ~5 GB of the 15.9 GB BF16, not half |
-| Total engine VRAM (gpu-manager) | ~15.5 GiB |
-| KV pin | 4 GiB = 159,285 tokens (2.43x at 65,536/request) |
+| Weights in VRAM (FP8) | 10.58 GiB (11.15 with the drafter) — Gemma-4 per-layer embeddings do not quantize, so FP8 saves ~5 GB of the 15.9 GB BF16, not half |
+| Total engine VRAM (gpu-manager) | ~15.5 GiB plain, ~16 GiB with the drafter |
+| KV pin | 4 GiB = 120,388 tokens with the drafter (1.84x at 65,536/request); 159,285 (2.43x) without |
 | Cold wake (warm weights, first boot) | ~3 min (80 s weight load) |
 | Single-stream decode, plain | 34–37 tok/s, TTFT 40–55 ms |
 | Smoke tests | chat OK, tool call OK (`get_weather` parsed), thinking on/off OK |
@@ -31,7 +31,7 @@ fixes it** (companion drafter, 580 MB, mounted at `/drafter`):
 | FP8 + DFlash, 4 draft tokens (default) | 78–95 tok/s | 66–70 / 343–443 tok/s |
 
 Mean acceptance length 2.4–2.7; per-position acceptance 0.63 / 0.38 / 0.23 /
-0.13 / 0.07, so drafts past 4 are wasted — 4 and 7 measured equal. Tool calls
+0.13 / 0.07, so drafts past position 4 are mostly wasted — 4 and 7 measured equal. Tool calls
 and thinking verified working under spec decode. Drafter engine VRAM +0.6 GiB;
 KV pin yields 120K tokens (1.84x at 64K) vs 159K without. LFM2.5 plain is
 74 tok/s, so with DFlash Bolt is now the faster single-stream engine; LFM2.5
@@ -65,7 +65,7 @@ JIT for new batch shapes, logged by vLLM's JIT monitor); steady-state TTFT is
 
 ## Not yet done
 
-- BF16-vs-FP8 quality/speed A/B and the full `03_concurrent.py 10` — sustained
+- BF16-vs-FP8 *quality* A/B (speed is done above) and the full `03_concurrent.py 10` — sustained
   GPU load, run under the thermal guard (invariant 8). The 8-stream numbers above
   are short (~15 s) bursts, board peaked 72°C.
 - Q4_K_M GGUF (`…-E4B-4GB`, llama.cpp `server-cuda13-b11459`) is an option if

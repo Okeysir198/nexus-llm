@@ -14,7 +14,13 @@ llm-engines/LLM_Ternary-Bonsai-2-27B/gguf-cache/
 llm-engines/LLM_Ternary-Bonsai-2-27B/bin/
 llm-engines/LLM_Ternary-Bonsai-2-27B/build.log
 
-# Drafter weights + fetch logs (config/README of drafters stay tracked)
-**/drafter/model.safetensors
+# Drafter weights + fetch logs (config/README of drafters stay tracked).
+# HF ships a .gitattributes with LFS rules for weights — ignore it, or any
+# weight that slips past these globs gets routed into LFS instead of failing.
+**/drafter/*.safetensors
+**/drafter/*.bin
+**/drafter/*.gguf
+**/drafter/*.pt
+**/drafter/.gitattributes
 download.log
 build.log

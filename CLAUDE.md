@@ -66,14 +66,16 @@ edge     hosted_llm:<X>
    `vllm/vllm-openai:v0.25.0-aarch64` — the only healthy NVFP4-MoE path on
    sm_121. **Never marlin** (2.5× slower for W4A4 on this box). Don't force
    `--attention-backend=flash_attn` (rejects FP8 KV; vLLM picks FlashInfer).
-7. **Spec-decode is a net loss on GB10 — verified on 3 checkpoints**
-   (Bonsai DSpark, Ornith MTP [Ornith removed 2026-10-24], RedHatAI Qwen3.6-35B DSpark=8: 35 vs 69
-   tok/s on the unsloth requant). Ornith's MTP head is unquantized → b12x
-   rejects it (crash-loop); the LFM2.5 DSpark drafter is unservable
+7. **Spec-decode is OFF by default — enable only after a per-checkpoint
+   before/after A/B.** Losses: Bonsai DSpark, Ornith MTP [Ornith removed
+   2026-10-24], RedHatAI Qwen3.6-35B DSpark=8 (35 vs 69 tok/s on the unsloth
+   requant). Ornith's MTP head is unquantized → b12x rejects it
+   (crash-loop); the LFM2.5 DSpark drafter is unservable
    (`Lfm2DSparkDraftModel` unregistered in every vLLM build here, incl.
-   cu134-nightly 2026-10-04 — llama.cpp-only). The one winning combo
-   (Qwen3.6-B12X + DFlash, FULL cudagraphs) is documented in the old
-   DFlash recipe. Always benchmark before/after; count tokens via
+   cu134-nightly 2026-10-04 — llama.cpp-only). Wins: Qwen3.6-B12X + DFlash
+   (FULL cudagraphs) and Nemotron-3.5-Bolt-E4B + DFlash (~2.4x — Gemma-4's
+   mixed head dims force TRITON_ATTN, so decode is attention-bound, not
+   bandwidth-bound; see its BENCHMARKS.md). Count tokens via
    `usage.completion_tokens`, NEVER SSE chunks — spec engines pack
    multiple tokens per chunk.
 8. **Sustained GPU load = thermal power-off risk** (see
@@ -141,19 +143,16 @@ ultra-low-VRAM specialist (8.6 GB, PrismML llama.cpp fork built from source —
 see its Dockerfile/BENCHMARKS.md). `Qwen3.6-35B-A3B-NVFP4-B12X` is the
 unsloth-Fast requant (38 GB, b12x no-spec — b12x and MTP are mutually
 exclusive on this checkpoint; the RedHatAI/DSpark A/B lost and was removed,
-see its BENCHMARKS.md). `Nemotron-3.5-Bolt-E4B` (added 2026-10-24) is NVIDIA's Gemma-4-E4B
-post-train for instruction following / persona / tool use: stock vLLM v0.32.0
-arm64, FP8 at load (~11 GiB weights, ~16 GiB total). Plain decode is only
-~37 tok/s (TRITON_ATTN forced, GPU-bound) — the companion DFlash drafter is ON
-and lifts it to ~88 tok/s single / ~420 aggregate@8 (a spec-decode WIN, unlike
-invariant 7's other drafters). Thinking is OFF unless
-`chat_template_kwargs.enable_thinking=true`.
-Qwen3.8-27B and Qwen3-30B were decommissioned
-(weights deleted).
+see its BENCHMARKS.md). `Nemotron-3.5-Bolt-E4B` (2026-10-24) is NVIDIA's
+Gemma-4-E4B post-train for instruction following / persona / tool use: FP8,
+DFlash ON (invariant 7), ~16 GiB, ~80–95 tok/s single; thinking OFF unless
+`enable_thinking=true` (numbers: its BENCHMARKS.md). Qwen3.8-27B and
+Qwen3-30B were decommissioned (weights deleted).
 
 Per-engine details, gotchas (image pins, the lfm2 enable_thinking trap), and all numbers: each engine folder's
 `BENCHMARKS.md`. Test harness note: `tests/shared.py` extra_body must stay
-model-conditional — `enable_thinking=false` is Qwen3-family only.
+model-conditional — it sends `enable_thinking=false` to every model except
+LFM2.5, whose template mishandles it.
 
 ## Tests
 

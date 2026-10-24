@@ -6,29 +6,18 @@
 # served-model-name = gateway route key.
 #
 # Role in the fleet (2026-10-24): small/fast voice + persona + tool-use model
-# next to LFM2.5. Card benchmarks beat Gemma-4-E4B everywhere; trails
-# Qwen3.5-4B on Tau2/RULER/LongBench. BENCHMARKS.md records the A/B.
+# next to LFM2.5. Numbers, A/Bs and gotchas: BENCHMARKS.md.
 #
 # GB10 notes:
-#   • Stock vllm/vllm-openai:v0.32.0 (arm64, already pulled) registers
-#     Gemma4ForConditionalGeneration, the `gemma4` tool + reasoning parsers
-#     and DFlashDraftModel — no custom image, no overlays. The card's recipe
-#     pins v0.31.0; 0.32 is newer.
-#   • Checkpoint is BF16 (~15.9 GB). FP8 dynamic quant at load is the default
-#     (LFM precedent). Gemma-4 per-layer embeddings do not quantize, so
-#     weights land at ~11 GiB, not ~8 — see BENCHMARKS.md. BF16 not A/B'd.
-#   • Multimodal towers are disabled (--limit-mm-per-prompt all 0): text only.
-#   • DFlash speculative decoding (companion NVFP4 drafter, mounted at
-#     /drafter) is ON and is what makes this engine fast: plain decode is a
-#     GPU-bound ~27 ms/step (Gemma-4 forces TRITON_ATTN; flat ~37 tok/s from 1
-#     to 8 streams), DFlash lifts single-stream to ~88 tok/s and 8-way
-#     aggregate from ~300 to ~420 tok/s. 4 vs 7 draft tokens measured equal
-#     (acceptance <10% past position 5). Unlike LFM/Bonsai drafters (invariant
-#     7), this one wins here — see BENCHMARKS.md.
-#   • Thinking is OFF by default; enable per request with
-#     chat_template_kwargs.enable_thinking=true. Card sampling: temperature
-#     1.0, top_p 0.95 (generation_config.json also sets top_k 64; vLLM applies
-#     it as the default).
+#   • Stock vllm/vllm-openai:v0.32.0 (arm64) registers Gemma4, the `gemma4`
+#     tool + reasoning parsers and DFlashDraftModel — no custom image.
+#   • FP8 per-tensor online quant of the BF16 checkpoint (BF16 measured slower).
+#     Text-only: --limit-mm-per-prompt all 0.
+#   • DFlash speculative decoding is ON (drafter mounted at /drafter). Plain
+#     decode is GPU-bound (Gemma-4 forces TRITON_ATTN), so the drafter is a
+#     ~2.4x win here — an A/B-proven exception to invariant 7's default-off.
+#     A missing ./drafter crash-loops the engine.
+#   • Thinking is OFF unless chat_template_kwargs.enable_thinking=true.
 name: ${STACK_NAME:-nexus-llm}
 
 services:
