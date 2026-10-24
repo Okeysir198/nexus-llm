@@ -15,6 +15,6 @@ llm-engines/LLM_Ternary-Bonsai-2-27B/bin/
 llm-engines/LLM_Ternary-Bonsai-2-27B/build.log
 
 # Drafter weights + fetch logs (config/README of drafters stay tracked)
-drafter/model.safetensors
+**/drafter/model.safetensors
 download.log
 build.log

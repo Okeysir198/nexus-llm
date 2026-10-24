@@ -143,9 +143,11 @@ unsloth-Fast requant (38 GB, b12x no-spec — b12x and MTP are mutually
 exclusive on this checkpoint; the RedHatAI/DSpark A/B lost and was removed,
 see its BENCHMARKS.md). `Nemotron-3.5-Bolt-E4B` (added 2026-10-24) is NVIDIA's Gemma-4-E4B
 post-train for instruction following / persona / tool use: stock vLLM v0.32.0
-arm64, FP8 at load (10.6 GiB weights, ~15.5 GiB total), ~35 tok/s single
-(slower than LFM, better card scores). Thinking is OFF unless
-`chat_template_kwargs.enable_thinking=true`. DFlash drafter not enabled.
+arm64, FP8 at load (~11 GiB weights, ~16 GiB total). Plain decode is only
+~37 tok/s (TRITON_ATTN forced, GPU-bound) — the companion DFlash drafter is ON
+and lifts it to ~88 tok/s single / ~420 aggregate@8 (a spec-decode WIN, unlike
+invariant 7's other drafters). Thinking is OFF unless
+`chat_template_kwargs.enable_thinking=true`.
 Qwen3.8-27B and Qwen3-30B were decommissioned
 (weights deleted).
 

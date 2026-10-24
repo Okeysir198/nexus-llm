@@ -15,15 +15,18 @@
 #     and DFlashDraftModel — no custom image, no overlays. The card's recipe
 #     pins v0.31.0; 0.32 is newer.
 #   • Checkpoint is BF16 (~15.9 GB). FP8 dynamic quant at load is the default
-#     (LFM precedent); LLM_BOLT_QUANT=off serves BF16. Gemma-4 per-layer
-#     embeddings may not quantize, so the real footprint is measured, not
-#     assumed — see BENCHMARKS.md.
+#     (LFM precedent). Gemma-4 per-layer embeddings do not quantize, so
+#     weights land at ~11 GiB, not ~8 — see BENCHMARKS.md. BF16 not A/B'd.
 #   • Multimodal towers are disabled (--limit-mm-per-prompt all 0): text only.
-#   • DFlash speculative decoding (companion NVFP4 drafter) is NOT enabled:
-#     NVIDIA's recipe is --max-num-seqs 1, and invariant 7 says spec-decode is
-#     usually a net loss on GB10. Benchmark before adding.
-#   • Thinking is on by default; disable per request with
-#     chat_template_kwargs.enable_thinking=false. Card sampling: temperature
+#   • DFlash speculative decoding (companion NVFP4 drafter, mounted at
+#     /drafter) is ON and is what makes this engine fast: plain decode is a
+#     GPU-bound ~27 ms/step (Gemma-4 forces TRITON_ATTN; flat ~37 tok/s from 1
+#     to 8 streams), DFlash lifts single-stream to ~88 tok/s and 8-way
+#     aggregate from ~300 to ~420 tok/s. 4 vs 7 draft tokens measured equal
+#     (acceptance <10% past position 5). Unlike LFM/Bonsai drafters (invariant
+#     7), this one wins here — see BENCHMARKS.md.
+#   • Thinking is OFF by default; enable per request with
+#     chat_template_kwargs.enable_thinking=true. Card sampling: temperature
 #     1.0, top_p 0.95 (generation_config.json also sets top_k 64; vLLM applies
 #     it as the default).
 name: ${STACK_NAME:-nexus-llm}
@@ -52,6 +55,7 @@ services:
       # weight resolution.
       - ${LLM_BOLT_HF_CACHE_DIR:-./hf-cache}:/models:ro
       - ./vllm-cache:/root/.cache/vllm
+      - ./drafter:/drafter:ro
     shm_size: "16gb"
     ulimits:
       memlock: -1
@@ -92,6 +96,7 @@ services:
       - --tool-call-parser=${LLM_BOLT_TOOL_PARSER:-gemma4}
       - --reasoning-parser=${LLM_BOLT_REASONING_PARSER:-gemma4}
       - --limit-mm-per-prompt={"image":0,"video":0,"audio":0}
+      - --speculative-config={"method":"dflash","model":"/drafter","num_speculative_tokens":${LLM_BOLT_SPEC_TOKENS:-4}}
       - --host=0.0.0.0
       - --port=8000
     networks:
